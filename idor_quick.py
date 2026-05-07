@@ -39,7 +39,82 @@ def check_token_expiry(cookies):
     print("  Make sure you copied the full cookie header value")
     return False
 
-def gql(cookies, query):
+def try_refresh_token(cookies):
+    """
+    Use the __Secure-refresh-token (valid 1 year) to get a fresh access token.
+    Returns updated cookie string if successful, else None.
+    """
+    refresh_token = None
+    for part in cookies.split(';'):
+        part = part.strip()
+        if part.startswith('__Secure-refresh-token='):
+            refresh_token = part.split('=', 1)[1]
+            break
+
+    if not refresh_token:
+        print("  No refresh token found in cookies")
+        return None
+
+    # Decode refresh token to get session_token
+    try:
+        payload_b64 = refresh_token.split('.')[1]
+        payload_b64 += '=' * (4 - len(payload_b64) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+        session_token = payload.get('session_token', '')
+        print(f"  Refresh token valid until: {payload.get('exp')} (1-year expiry)")
+        print(f"  Session token prefix: {session_token[:30]}...")
+    except Exception as e:
+        print(f"  Could not decode refresh token: {e}")
+        return None
+
+    # Try Whatnot's token refresh endpoint
+    endpoints_to_try = [
+        ("POST", "https://api.whatnot.com/api/refresh", {}),
+        ("POST", "https://api.whatnot.com/api/token/refresh", {}),
+        ("POST", "https://api.whatnot.com/api/auth/refresh", {}),
+        ("POST", "https://api.whatnot.com/api/login/refresh", {}),
+    ]
+    base_headers = {
+        "Content-Type": "application/json",
+        "X-Whatnot-App": "whatnot-web",
+        "X-Whatnot-App-Version": "20260507-1520",
+        "Cookie": cookies,
+    }
+    for method, url, body in endpoints_to_try:
+        try:
+            r = requests.post(url, headers=base_headers,
+                              json={"refresh_token": session_token} if body == {} else body,
+                              timeout=10)
+            print(f"  Refresh attempt {url}: HTTP {r.status_code} {r.text[:100]}")
+            if r.status_code == 200:
+                # Extract new access token from response or Set-Cookie
+                new_token = None
+                try:
+                    data = r.json()
+                    new_token = (data.get('access_token') or data.get('token') or
+                                 data.get('accessToken'))
+                except Exception:
+                    pass
+                if not new_token:
+                    for cookie_header in r.headers.get('Set-Cookie', '').split(','):
+                        if '__Secure-access-token=' in cookie_header:
+                            new_token = cookie_header.split('__Secure-access-token=')[1].split(';')[0]
+                            break
+                if new_token:
+                    print(f"  Got fresh access token: {new_token[:40]}...")
+                    # Replace old token in cookie string
+                    import re
+                    new_cookies = re.sub(
+                        r'__Secure-access-token=[^;]+',
+                        f'__Secure-access-token={new_token}',
+                        cookies
+                    )
+                    return new_cookies
+        except Exception as e:
+            print(f"  {url}: {e}")
+    return None
+
+
     r = requests.post(WEB_GQL, headers={
         "Content-Type": "application/json",
         "X-Whatnot-App": "whatnot-web",
@@ -74,8 +149,18 @@ def main():
     print(f"  Cookie string length: {len(cookies)} chars")
     token_ok = check_token_expiry(cookies)
     if not token_ok:
-        print("\n  *** Copy fresh cookies NOW and immediately run: pbpaste > cookies_a.txt && python3 idor_quick.py ***")
-        sys.exit(1)
+        print("\n  Access token expired — attempting auto-refresh using 1-year refresh token...")
+        refreshed = try_refresh_token(cookies)
+        if refreshed:
+            cookies = refreshed
+            print("  Token refreshed successfully!")
+            # Save refreshed cookies back
+            with open("cookies_a.txt", "w") as f:
+                f.write(cookies)
+        else:
+            print("\n  Auto-refresh failed. Get fresh cookies and run:")
+            print("  pbpaste > cookies_a.txt && python3 idor_quick.py")
+            sys.exit(1)
 
     r = gql(cookies, "{ me { id username } }")
     print(f"HTTP {r.status_code}: {r.text[:300]}")
