@@ -46,12 +46,12 @@ HEADER_SETS = [
         "Origin": "https://www.whatnot.com",
         "Referer": "https://www.whatnot.com/",
     },
-    {   # web with current apollo version stamp
+    {   # web — confirmed working version captured 2026-05-07
         "Content-Type": "application/json",
         "X-Whatnot-App": "whatnot-web",
-        "Apollographql-Client-Name": "web",
-        "Apollographql-Client-Version": "20260427-0000",
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
+        "X-Whatnot-App-Version": "20260507-1520",
+        "X-Whatnot-App-Context": "next-js/browser",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
         "Origin": "https://www.whatnot.com",
         "Referer": "https://www.whatnot.com/",
     },

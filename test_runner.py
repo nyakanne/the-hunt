@@ -19,6 +19,7 @@ from datetime import datetime
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 BASE_API      = "https://api.whatnot.com"
+WEB_GQL       = "https://www.whatnot.com/services/graphql/"
 SELLER_GQL    = f"{BASE_API}/seller-api/graphql"
 MAIN_GQL      = f"{BASE_API}/graphql"
 LOGIN_URL     = f"{BASE_API}/api/login"
@@ -29,24 +30,28 @@ OAUTH_AUTH    = f"{BASE_API}/seller-api/rest/oauth/authorize"
 OAUTH_TOKEN   = f"{BASE_API}/seller-api/rest/oauth/token"
 
 HEADER_SETS = [
-    {   # iOS app — bypasses version gate reliably
+    {   # web — current confirmed version (captured 2026-05-07)
+        "Content-Type": "application/json",
+        "X-Whatnot-App": "whatnot-web",
+        "X-Whatnot-App-Version": "20260507-1520",
+        "X-Whatnot-App-Context": "next-js/browser",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+        "Origin": "https://www.whatnot.com",
+        "Referer": "https://www.whatnot.com/",
+    },
+    {   # iOS app
         "Content-Type": "application/json",
         "X-Whatnot-App": "whatnot-ios",
+        "X-Whatnot-App-Version": "20260507-1520",
         "User-Agent": "Whatnot/26.15.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X)",
         "Origin": "https://www.whatnot.com",
     },
     {   # Android app
         "Content-Type": "application/json",
         "X-Whatnot-App": "whatnot-android",
+        "X-Whatnot-App-Version": "20260507-1520",
         "User-Agent": "Whatnot/26.15.0 (Linux; Android 14; Pixel 8)",
         "Origin": "https://www.whatnot.com",
-    },
-    {   # web — no version header
-        "Content-Type": "application/json",
-        "X-Whatnot-App": "whatnot-web",
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
-        "Origin": "https://www.whatnot.com",
-        "Referer": "https://www.whatnot.com/",
     },
 ]
 
