@@ -67,51 +67,62 @@ def try_refresh_token(cookies):
         print(f"  Could not decode refresh token: {e}")
         return None
 
+    # Parse usid and appsid from cookies for required headers
+    import re
+    usid = ''
+    for part in cookies.split(';'):
+        part = part.strip()
+        if part.startswith('usid='):
+            usid = part.split('=', 1)[1]
+            break
+
     base_headers = {
         "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Authorization": "Cookie",
         "Origin": "https://www.whatnot.com",
         "Referer": "https://www.whatnot.com/",
         "X-Whatnot-App": "whatnot-web",
         "X-Whatnot-App-Version": "20260515-1640",
         "X-Whatnot-App-Context": "next-js/browser",
+        "X-Whatnot-App-Pathname": "/",
+        "X-Whatnot-App-Screen": "/",
+        "X-Whatnot-App-User-Session-Id": usid,
+        "X-Client-Timezone": "America/Los_Angeles",
         "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.3 Mobile/15E148 Safari/604.1",
         "Cookie": cookies,
     }
-    endpoints_to_try = [
-        "https://www.whatnot.com/services/api/v2/refresh",  # confirmed via Charles
-        "https://www.whatnot.com/api/auth/refresh",
-        "https://www.whatnot.com/api/refresh",
-    ]
-    import re
-    for url in endpoints_to_try:
-        try:
-            r = requests.post(url, headers=base_headers,
-                              json={"refresh_token": session_token},
-                              timeout=10)
-            print(f"  Refresh attempt {url}: HTTP {r.status_code} {r.text[:120]}")
-            if r.status_code == 200:
-                new_token = None
-                try:
-                    data = r.json()
-                    new_token = (data.get('access_token') or data.get('token') or
-                                 data.get('accessToken'))
-                except Exception:
-                    pass
-                if not new_token:
-                    set_cookie = r.headers.get('Set-Cookie', '')
-                    m = re.search(r'__Secure-access-token=([^;]+)', set_cookie)
-                    if m:
-                        new_token = m.group(1)
-                if new_token:
-                    print(f"  Got fresh access token: {new_token[:40]}...")
-                    new_cookies = re.sub(
-                        r'__Secure-access-token=[^;]+',
-                        f'__Secure-access-token={new_token}',
-                        cookies
-                    )
-                    return new_cookies
-        except Exception as e:
-            print(f"  {url}: {e}")
+
+    url = "https://www.whatnot.com/services/api/v2/refresh"
+    try:
+        r = requests.post(url, headers=base_headers, json={}, timeout=10)
+        print(f"  Refresh attempt {url}: HTTP {r.status_code} {r.text[:200]}")
+        if r.status_code == 200:
+            new_token = None
+            try:
+                data = r.json()
+                new_token = (data.get('access_token') or data.get('token') or
+                             data.get('accessToken'))
+            except Exception:
+                pass
+            if not new_token:
+                set_cookie = r.headers.get('Set-Cookie', '')
+                m = re.search(r'__Secure-access-token=([^;]+)', set_cookie)
+                if m:
+                    new_token = m.group(1)
+            if new_token:
+                print(f"  Got fresh access token: {new_token[:40]}...")
+                new_cookies = re.sub(
+                    r'__Secure-access-token=[^;]+',
+                    f'__Secure-access-token={new_token}',
+                    cookies
+                )
+                return new_cookies
+            else:
+                print(f"  HTTP 200 but no token found in response or Set-Cookie")
+                print(f"  Response headers: {dict(r.headers)}")
+    except Exception as e:
+        print(f"  {url}: {e}")
     return None
 
 def gql(cookies, query):
