@@ -78,12 +78,9 @@ def try_refresh_token(cookies):
         "Cookie": cookies,
     }
     endpoints_to_try = [
+        "https://www.whatnot.com/services/api/v2/refresh",  # confirmed via Charles
         "https://www.whatnot.com/api/auth/refresh",
         "https://www.whatnot.com/api/refresh",
-        "https://api.whatnot.com/api/refresh",
-        "https://api.whatnot.com/api/token/refresh",
-        "https://api.whatnot.com/api/auth/refresh",
-        "https://api.whatnot.com/api/login/refresh",
     ]
     import re
     for url in endpoints_to_try:
