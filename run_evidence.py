@@ -25,8 +25,21 @@ REFRESH_TOKEN = (
     ".cAZlt0Wk-LEeqprfuOMvzPtHqQRUv74iRrasC6T8kSSketLPwnSZxPdOSxi9AiZjp640ggoIYbDVrxCDBtmwCA"
 )
 
-STATIC_COOKIES = (
+FULL_COOKIE_BASE = (
     "stable-id=fcdd7ff3-1878-46ed-8469-725bdcce7b94; "
+    "cookieyes-consent=consentid:U29zcmwwUzhyTjJnSGlvbmtNV3pNOGxHbElHSjVzOWc,consent:yes,action:no,necessary:yes,functional:yes,analytics:yes,performance:yes,advertisement:yes,other:yes; "
+    "__ps_r=_; __ps_lu=https://www.whatnot.com/; "
+    "__spdt=7029ede7eb654121a0b586c593575606; "
+    "ajs_user_id=58968022; ajs_anonymous_id=67ab98a9-a27a-48e3-a164-204e2d284ac1; "
+    "disableAutologin=true; "
+    "device=85584c52-3177-4581-b0dc-5c47e3ea18f1; "
+    "usid=41ada6a0-0eab-40e1-9229-6d7a0d653831; "
+    "sessionId=f53961ee-254e-407c-a50c-d8c70fb6893b; "
+    "__Secure-is-http-only-auth=1; "
+    "__Secure-access-token-fp=none; "
+    "__Secure-refresh-token-fp=none; "
+    "__Secure-claims=eyJjIjoxNzgwMzg2MDMzMjUzLCJzIjoiYWEzOThhN2UtOGZiMy00MjJjLWE4MzktYjNkYTFiMjQ5MTY2IiwidSI6NTg5NjgwMjJ9; "
+    "tatari-user-cookie=58968022; "
     "__Secure-refresh-token=" + REFRESH_TOKEN
 )
 
@@ -96,10 +109,10 @@ def main():
     log("\n[*] Refreshing access token...")
     new_access = refresh_access_token()
     if new_access:
-        full_cookie = STATIC_COOKIES + f"; __Secure-access-token={new_access}"
+        full_cookie = FULL_COOKIE_BASE + f"; __Secure-access-token={new_access}"
     else:
-        log("  Could not refresh — will try with refresh token cookie only")
-        full_cookie = STATIC_COOKIES
+        log("  Could not refresh — will try with base cookies only")
+        full_cookie = FULL_COOKIE_BASE
 
     # ── Evidence A: staging API public ───────────────────────────────────────
     log("\n=== Evidence A: Staging API publicly reachable ===")
