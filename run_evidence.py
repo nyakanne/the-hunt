@@ -22,11 +22,20 @@ PASSWORD = "Mamaoye08190!"
 REFRESH_TOKEN = (
     "eyJhbGciOiJFZERTQSIsImtpZCI6IndoYXRub3QtcmVmcmVzaC1wcm9kLTEiLCJ0eXAiOiJKV1QifQ"
     ".eyJzdWIiOjU4OTY4MDIyLCJpc3MiOiJ3aGF0bm90L2F1dGgiLCJhdWQiOiJ3aGF0bm90L3JlZnJlc2gi"
-    "LCJleHAiOjE4MTE5MjI1MDUsImlhdCI6MTc4MDM4NjUwNSwibmJmIjoxNzgwMzg2NTA1LCJqdGkiOiI2"
-    "RmhhYUl4QWZTMDNfajQyV2tyY25RIiwiYXBwc2lkIjoiYWEzOThhN2UtOGZiMy00MjJjLWE4MzktYjNk"
+    "LCJleHAiOjE4MTE5MjIwMzQsImlhdCI6MTc4MDM4NjAzNCwibmJmIjoxNzgwMzg2MDM0LCJqdGkiOiJ1"
+    "b1F2UDJ0Y2dHMjg1TUR5OWJlQkl3IiwiYXBwc2lkIjoiYWEzOThhN2UtOGZiMy00MjJjLWE4MzktYjNk"
     "YTFiMjQ5MTY2IiwidXByIjoxLjAsInNlc3Npb25fdG9rZW4iOiJ3bl9ydF9INjduUXR1MEZ6RHl3U19k"
-    "MWxOQzpnZ3Nod2F6MWJwOWtDZ1ZNRzZnUyJ9"
-    ".cAZlt0Wk-LEeqprfuOMvzPtHqQRUv74iRrasC6T8kSSketLPwnSZxPdOSxi9AiZjp640ggoIYbDVrxCDBtmwCA"
+    "MWxOQzpYbC13aG84cWJOczJibDdDY1ZzMiJ9"
+    ".XUDXFHG5SkWvNnqql3MxS-xYChVSiI3oUgF8NpreGthRx7u0C90YTOcBH7V0H4g9PX0XjPlhfu5i2vdyi_btDQ"
+)
+
+WHATNOT_LIVE = (
+    "SFMyNTY.g3QAAAACbQAAAAtfY3NyZl90b2tlbm0AAAAYck1reUJLYUdzVnYxcG8ybGJ5bW15UmRCbQAAAAZj"
+    "bGFpbXN0AAAACm0AAAAGYXBwc2lkbQAAACRjYmE2ZGM2My1mMjJmLTRiN2YtYjBhZi04ZTMyOTI1MGMyZGVt"
+    "AAAAA2F1ZG0AAAAOd2hhdG5vdC9hY2Nlc3NtAAAAA2V4cGJqHkAIbQAAAANpYXRiah4-3G0AAAAIaWRlbnRp"
+    "dHltAAAAHGFubmVzaGlybGV5bnlha28rYUBnbWFpbC5jb21tAAAAA2lzc20AAAAMd2hhdG5vdC9hdXRobQAA"
+    "AANqdGltAAAAFjJ5bTQtWm1GWVluSzAybjlxZklwWndtAAAAA25iZmJqHj7cbQAAAANzdWJtAAAACDU4OTY4"
+    "MDIybQAAAAN1cHJGP_AAAAAAAAA.tWb8yyZ1N1Q4UMlfEIns6_-QRY5RutY1ZOcLvnExP2M"
 )
 
 BASE_HEADERS = {
@@ -96,7 +105,6 @@ def try_refresh(session):
         "Content-Type": "application/json",
         "Authorization": "Cookie",
     }
-    session.cookies.set("__Secure-refresh-token", REFRESH_TOKEN, domain="www.whatnot.com")
     try:
         r = session.post("https://www.whatnot.com/services/api/v2/refresh",
                          json={}, headers=h, timeout=15)
@@ -148,6 +156,27 @@ def main():
 
     # ── authenticate ──────────────────────────────────────────────────────────
     session = requests.Session()
+
+    # Seed session with all base cookies including Phoenix live token
+    base_cookies = {
+        "stable-id": "fcdd7ff3-1878-46ed-8469-725bdcce7b94",
+        "ajs_user_id": "58968022",
+        "disableAutologin": "true",
+        "device": "85584c52-3177-4581-b0dc-5c47e3ea18f1",
+        "usid": "41ada6a0-0eab-40e1-9229-6d7a0d653831",
+        "sessionId": "ae6ec54f-3671-4e0b-a08e-e46803b563a7",
+        "csrf": "IkRfNSNlQVp5TFcoam9edHdMdCNFNWpScVcqZkZAQiVpLkZpNEd4T2tMZWZ3VmlwQ1FnaEV2Y1hvNUxkTWo1N2RHVHJJR2hzS1NEaXM9Ig%3D%3D",
+        "__Secure-is-http-only-auth": "1",
+        "__Secure-access-token-fp": "none",
+        "__Secure-refresh-token-fp": "none",
+        "__Secure-claims": "eyJjIjoxNzgwMzg2MDMzMjUzLCJzIjoiYWEzOThhN2UtOGZiMy00MjJjLWE4MzktYjNkYTFiMjQ5MTY2IiwidSI6NTg5NjgwMjJ9",
+        "tatari-user-cookie": "58968022",
+        "tatari-session-cookie": "06feb852-5f2e-e730-868e-873c6a155247",
+        "__Secure-whatnot-live": WHATNOT_LIVE,
+        "__Secure-refresh-token": REFRESH_TOKEN,
+    }
+    for name, value in base_cookies.items():
+        session.cookies.set(name, value, domain="www.whatnot.com")
     authed = False
 
     if try_login(session):
