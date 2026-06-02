@@ -75,7 +75,7 @@ def gql(url, query, cookie_str=None, bearer=None):
         return 0, {"_error": str(e)}
 
 def refresh_access_token():
-    """Use the refresh token to get a new short-lived access token."""
+    """Use the refresh token to get all new session cookies."""
     h = dict(HEADERS)
     h["Cookie"] = f"__Secure-refresh-token={REFRESH_TOKEN}"
     h["Authorization"] = "Cookie"
@@ -84,14 +84,11 @@ def refresh_access_token():
                           json={}, headers=h, timeout=15)
         log(f"  Refresh endpoint: HTTP {r.status_code}")
         if r.status_code == 200:
-            # new access token comes back as a Set-Cookie
-            new_access = None
-            for sc in r.headers.get("Set-Cookie", "").split(","):
-                if "__Secure-access-token=" in sc:
-                    new_access = sc.split("__Secure-access-token=")[1].split(";")[0].strip()
-            if new_access:
-                log(f"  Got fresh access token (len={len(new_access)})")
-                return new_access
+            # requests.cookies captures all Set-Cookie headers automatically
+            new_cookies = {c.name: c.value for c in r.cookies}
+            log(f"  New cookies from refresh: {list(new_cookies.keys())}")
+            if new_cookies:
+                return new_cookies
         log(f"  Refresh body: {r.text[:200]}")
     except Exception as e:
         log(f"  Refresh error: {e}")
@@ -107,12 +104,20 @@ def main():
 
     # ── refresh access token ──────────────────────────────────────────────────
     log("\n[*] Refreshing access token...")
-    new_access = refresh_access_token()
-    if new_access:
-        full_cookie = FULL_COOKIE_BASE + f"; __Secure-access-token={new_access}"
+    new_cookies = refresh_access_token()
+    if new_cookies:
+        # Merge: base cookies first, then override/append all fresh cookies from refresh
+        base_parts = {k.strip(): v.strip()
+                      for part in FULL_COOKIE_BASE.split(";")
+                      if "=" in part
+                      for k, v in [part.strip().split("=", 1)]}
+        base_parts.update(new_cookies)
+        full_cookie = "; ".join(f"{k}={v}" for k, v in base_parts.items())
+        new_access = new_cookies.get("__Secure-access-token", "")
     else:
         log("  Could not refresh — will try with base cookies only")
         full_cookie = FULL_COOKIE_BASE
+        new_access = ""
 
     # ── Evidence A: staging API public ───────────────────────────────────────
     log("\n=== Evidence A: Staging API publicly reachable ===")
